@@ -1,0 +1,19 @@
+# Core NLP & Clustering
+bertopic @ git+https://github.com/MaartenGr/BERTopic.git
+umap-learn
+hdbscan
+scikit-learn
+pandas
+numpy
+
+# VaDE dependencies
+torch
+
+# SQL & Parquet I/O
+SQLAlchemy
+pyodbc
+python-dotenv
+pyarrow  # for reading parquet files
+
+# Optional: Logging enhancements
+loguru
