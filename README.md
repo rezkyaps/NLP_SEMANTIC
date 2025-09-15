@@ -66,7 +66,7 @@ For Research and Evaluation
 Running this SQL schema ensures you:
 - Have consistent structure across all development, testing, and production environments
 - Enable marking/labeling via normalized tables (used in cross-validation)
-- Can audit model results — all predictions and keyword scores are logged to `t_*` tables
+- Can audit model results - all predictions and keyword scores are logged to `t_*` tables
 - Get end-to-end traceability from raw input to predicted label to score justification
 
 Optional:
