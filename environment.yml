@@ -1,0 +1,26 @@
+name: nlp_semantic
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pandas
+  - numpy
+  - scikit-learn
+  - sqlalchemy
+  - pyodbc
+  - tqdm
+  - matplotlib
+  - seaborn
+  - sentence-transformers
+  - keybert
+  - ipykernel
+  - jupyter
+  - pip
+  - pip:
+      - fastparquet
+      - fsspec
+      - imbalanced-learn
+      - iterative-stratification
+      - transformers
+      - rich

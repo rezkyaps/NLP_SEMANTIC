@@ -7,8 +7,43 @@ from sqlalchemy import create_engine
 import json
 import os
 
+# ====================================================
+# PSEUDOCODE - SURVEY & TOPIC COMPARISON ANALYSIS
+# ----------------------------------------------------
+# 1. Connect to SQL database and load survey responses.
+# 2. Clean and normalize the column names.
+# 3. Create visual summaries of:
+#    - Method usage (bar chart)
+#    - Gender distribution (pie chart)
+#    - Age distribution (histogram)
+#
+# 4. Load topic prediction results (from topic modeling).
+# 5. Merge with survey data on response_id.
+# 6. Compare methods from survey vs predicted topics:
+#    - Create a crosstab of methods vs topics.
+#    - Save heatmap + CSV of this comparison.
+#    - Count matches vs mismatches.
+#
+# 7. Plot trainer clusters (2D embeddings):
+#    - First colored by predicted topic
+#    - Then colored by survey-reported method
+#    - Optionally draw mismatch arrows (top 100 only)
+# ====================================================
 
 def explore_survey_summary(conn_str: str, table_name: str = "t_survey"):
+    """
+    Loads survey data from a SQL table, performs basic cleaning and normalization, 
+    and generates exploratory visualizations including method usage, gender distribution, 
+    and age histogram.
+
+    Parameters:
+        conn_str (str): SQLAlchemy connection string to the database.
+        table_name (str): Name of the survey table to load (default: 't_survey').
+
+    Returns:
+        pd.DataFrame: Cleaned survey dataframe with added derived fields.
+    """
+
     engine = create_engine(conn_str)
     df = pd.read_sql_table(table_name, engine)
 
@@ -47,6 +82,19 @@ def explore_survey_summary(conn_str: str, table_name: str = "t_survey"):
 
 
 def compare_methods_survey_vs_cluster(survey_df: pd.DataFrame, cluster_df: pd.DataFrame, topic_model_path: str):
+    """
+    Compares survey-reported training methods with predicted topic clusters, 
+    generates a heatmap and mismatch summary.
+
+    Parameters:
+        survey_df (pd.DataFrame): DataFrame containing raw survey data.
+        cluster_df (pd.DataFrame): DataFrame with topic model predictions.
+        topic_model_path (str): Output directory for saving plots and CSVs.
+
+    Returns:
+        pd.DataFrame: Merged DataFrame with survey methods and topic predictions.
+    """
+
     # Merge survey with topic prediction
     df = pd.merge(survey_df, cluster_df, on="response_id", how="inner")
 
@@ -80,6 +128,21 @@ def compare_methods_survey_vs_cluster(survey_df: pd.DataFrame, cluster_df: pd.Da
 
 
 def plot_cluster_colored_by_survey(df: pd.DataFrame, embedding_col: str = "embedding_local"):
+    """
+    Visualizes 2D cluster projections of trainers based on embeddings.
+    Generates two scatter plots:
+        1. Colored by predicted topic.
+        2. Colored by reported survey methods.
+    Also includes optional mismatch annotation arrows.
+
+    Parameters:
+        df (pd.DataFrame): DataFrame with 2D embeddings and method/topic info.
+        embedding_col (str): Column containing serialized embedding vectors (default: 'embedding_local').
+
+    Returns:
+        None. Saves visualizations as PNG files to disk.
+    """
+
     # Extract 2D embeddings for plotting
     coords = np.vstack(df[embedding_col].apply(json.loads).tolist())
     topics = df["topic"]
@@ -132,6 +195,19 @@ def plot_cluster_colored_by_survey(df: pd.DataFrame, embedding_col: str = "embed
 
 
 def run_analysis(conn_str: str):
+    """
+    Executes the full analysis pipeline:
+        - Loads topic cluster predictions and survey data
+        - Compares topics vs methods
+        - Generates cluster visualizations
+
+    Parameters:
+        conn_str (str): SQLAlchemy connection string to the database.
+
+    Returns:
+        None. Saves all outputs to the 'outputs/' directory.
+    """
+
     topic_model_path = "outputs"
 
     engine = create_engine(conn_str)

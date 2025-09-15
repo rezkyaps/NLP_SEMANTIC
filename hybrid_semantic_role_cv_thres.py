@@ -11,10 +11,49 @@ from sklearn.utils.class_weight import compute_class_weight
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import StratifiedKFold
 
+
+##############################################
+# PSEUDOCODE - ROLE CLASSIFIER CV PIPELINE
+##############################################
+
+# 1. Load survey text responses and role labels from SQL.
+# 2. Load role-related keywords and scores (semantic, gating, etc.) from database.
+# 3. Encode all keywords and survey texts using a sentence transformer.
+# 4. For each role label:
+#     a. Calculate cosine similarities between text and keywords.
+#     b. Weight similarities with multiple score types.
+#     c. Pad all vectors to uniform length for consistent feature dimensions.
+#     d. Append similarity stats: mean, max, and binary flag.
+# 5. Concatenate role-wise features into a single feature matrix.
+# 6. Create binary multi-label targets from the role columns.
+# 7. Apply guided oversampling to improve label balance.
+# 8. Compute class weights for handling label imbalance.
+# 9. Train one RandomForestClassifier per role label.
+# 10. Tune decision thresholds using ROC Youden’s index.
+# 11. Log full-set prediction results (F1, accuracy, per-sample output).
+# 12. Run Stratified K-Fold CV for robustness evaluation.
+# 13. Output overall macro F1 and accuracy per fold and on full set.
+
 def log(msg):
     print(f"[INFO] {msg}")
 
 def build_features_and_labels(df_survey, df_kw, model):
+    """
+    Build semantic similarity features between survey text and role-specific keywords.
+
+    Parameters:
+        df_survey (pd.DataFrame): Survey responses including cleaned text and role labels.
+        df_kw (pd.DataFrame): Keyword metadata for each role including gating scores.
+        model (SentenceTransformer): Pretrained transformer for embedding generation.
+
+    Returns:
+        tuple:
+            - X (np.ndarray): Final feature matrix (semantic + scores).
+            - y (np.ndarray): Multi-label binary matrix for role labels.
+            - text_embeddings (np.ndarray): Embeddings of the input texts.
+            - df_survey (pd.DataFrame): Original survey data.
+    """
+
     for col in ['semantic_score', 'final_score', 'gate_factor', 'semantic_prompt_score']:
         df_kw[col] = df_kw[col].astype(str).str.replace(',', '.').astype(float)
 
@@ -64,6 +103,16 @@ def build_features_and_labels(df_survey, df_kw, model):
 
 
 def compute_weights(y):
+    """
+    Compute balanced class weights for each label using sklearn's utility.
+
+    Parameters:
+        y (np.ndarray): Multi-label binary matrix.
+
+    Returns:
+        list[float]: Class weights for the positive class (label=1) per label column.
+    """
+
     weights = []
     for i in range(y.shape[1]):
         unique_vals = np.unique(y[:, i])
@@ -94,6 +143,18 @@ def guided_oversample(X, y, df_survey=None, min_pos=5):
     return X_aug, y_aug, df_aug
 
 def apply_threshold(probas, threshold_map=None, default_threshold=0.5):
+    """
+    Convert prediction probabilities into binary decisions using per-label thresholds.
+
+    Parameters:
+        probas (np.ndarray): Probability scores (n_samples x n_labels).
+        threshold_map (dict): Optional dictionary with label index to threshold mapping.
+        default_threshold (float): Fallback threshold when not in map.
+
+    Returns:
+        np.ndarray: Binary matrix of predictions.
+    """
+
     preds = np.zeros_like(probas, dtype=int)
     for i in range(probas.shape[1]):
         threshold = threshold_map.get(i, default_threshold) if threshold_map else default_threshold
@@ -101,6 +162,21 @@ def apply_threshold(probas, threshold_map=None, default_threshold=0.5):
     return preds
 
 def find_best_threshold(y_true, y_prob):
+    """
+    Identify optimal classification threshold using Youden's index on the ROC curve.
+
+    Parameters:
+        y_true (np.ndarray): True binary labels.
+        y_prob (np.ndarray): Predicted probabilities.
+
+    Returns:
+        tuple:
+            - best_thresh (float): Threshold with maximum TPR - FPR.
+            - fpr (np.ndarray): False positive rates.
+            - tpr (np.ndarray): True positive rates.
+            - thresholds (np.ndarray): Evaluated thresholds.
+    """
+
     if len(np.unique(y_true)) < 2:
         return 1.0, None, None, None
     fpr, tpr, thresholds = roc_curve(y_true, y_prob)
@@ -109,6 +185,18 @@ def find_best_threshold(y_true, y_prob):
     return best_thresh, fpr, tpr, thresholds
 
 def evaluate_and_log_all(X, y, best_estimators, threshold_map, df_survey, default_threshold=None):
+    """
+    Evaluate classifiers on the full dataset and log predictions and overall metrics.
+
+    Parameters:
+        X (np.ndarray): Feature matrix.
+        y (np.ndarray): True multi-label binary labels.
+        best_estimators (list): Trained classifiers.
+        threshold_map (dict): Thresholds per label.
+        df_survey (pd.DataFrame): Survey responses for tracking predictions.
+        default_threshold (float): Used if no threshold is provided for a label.
+    """
+
     probas = np.column_stack([
         clf.predict_proba(X)[:, 1] if len(clf.classes_) > 1 else np.zeros(X.shape[0])
         for clf in best_estimators
@@ -123,6 +211,19 @@ def evaluate_and_log_all(X, y, best_estimators, threshold_map, df_survey, defaul
         log(f"[FULL] Respondent ID: {rid} | Pred: {preds[i].tolist()} | True: {y[i].tolist()}")
 
 def robustness_split_and_evaluate(X_os, y_os, df_survey_os, best_estimators, threshold_map, default_threshold=None, folds=5):
+    """
+    Perform Stratified K-Fold CV to evaluate model robustness on oversampled data.
+
+    Parameters:
+        X_os (np.ndarray): Oversampled feature matrix.
+        y_os (np.ndarray): Oversampled multi-label targets.
+        df_survey_os (pd.DataFrame): Oversampled metadata (e.g. response_id).
+        best_estimators (list): Trained classifiers.
+        threshold_map (dict): Per-label thresholds.
+        default_threshold (float): Fallback threshold.
+        folds (int): Number of CV splits.
+    """
+
     log("\n===== ROBUSTNESS TEST (split on oversampled data) =====")
     skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=56)
     stratify_label = y_os[:, 2]  # PATCH: label_03 is index 2
@@ -155,6 +256,17 @@ def robustness_split_and_evaluate(X_os, y_os, df_survey_os, best_estimators, thr
     log(f"Average Accuracy: {np.mean(acc_list):.4f}")
 
 def crossval_with_fixed_threshold(X, y, df_survey, use_tuned_threshold=True, folds=5):
+    """
+    Full training pipeline: oversampling, training, threshold tuning, and evaluation.
+
+    Parameters:
+        X (np.ndarray): Feature matrix.
+        y (np.ndarray): Multi-label binary label matrix.
+        df_survey (pd.DataFrame): Survey data for logging and prediction tracking.
+        use_tuned_threshold (bool): Whether to use auto-tuned or manual thresholds.
+        folds (int): Number of folds for robustness CV.
+    """
+
     seed = 56
     log(f"\n===== Running CV evaluation using global weights & thresholds (seed={seed}) =====")
 

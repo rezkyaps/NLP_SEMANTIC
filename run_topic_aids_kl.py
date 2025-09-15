@@ -35,10 +35,8 @@ W_JSD = 0.40
 W_PROMPT = 0.30
 FILTER_NUMERIC = True
 
-
 def _norm(s: str) -> str:
     return " ".join(s.strip().lower().split())
-
 
 def cluster_keywords(keywords, model, threshold=CLUSTER_THRESHOLD):
     if not keywords:
@@ -55,7 +53,6 @@ def cluster_keywords(keywords, model, threshold=CLUSTER_THRESHOLD):
             clustered[label] = (texts[i], keywords[i][1])
     return list(clustered.values())
 
-
 def run_topic_aids(conn_str: str):
     start = time.time()
     logger.info(" START: Keyword extraction by aid type + code")
@@ -64,7 +61,7 @@ def run_topic_aids(conn_str: str):
     model = SentenceTransformer("all-mpnet-base-v2")
     kw_model = KeyBERT(model)
 
-    logger.info("📥 Loading existing keywords and aid list...")
+    logger.info(" Loading existing keywords and aid list...")
     with engine.connect() as conn:
         df_methods = pd.read_sql("SELECT keyword FROM t_keywords_by_methods", conn)
         df_roles = pd.read_sql("SELECT keyword FROM t_keywords_by_role", conn)
@@ -206,7 +203,6 @@ def run_topic_aids(conn_str: str):
             )
 
     logger.info(f" DONE. Inserted {len(kw_best)} keywords in {time.time() - start:.2f}s")
-
 
 if __name__ == "__main__":
     conn_str = "mssql+pyodbc://@localhost\\SQLSERV2019/NLP_DOGSTRUST_DEPLOY?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"

@@ -1,0 +1,16 @@
+2025-08-24 12:44:01,354 - INFO - Use pytorch device_name: cpu
+2025-08-24 12:44:01,354 - INFO - Load pretrained SentenceTransformer: all-mpnet-base-v2
+2025-08-24 12:49:08,064 - INFO - Use pytorch device_name: cpu
+2025-08-24 12:49:08,068 - INFO - Load pretrained SentenceTransformer: all-mpnet-base-v2
+2025-08-24 13:32:35,321 - INFO - Use pytorch device_name: cpu
+2025-08-24 13:32:35,321 - INFO - Load pretrained SentenceTransformer: all-mpnet-base-v2
+2025-08-24 13:35:58,234 - INFO - Use pytorch device_name: cpu
+2025-08-24 13:35:58,234 - INFO - Load pretrained SentenceTransformer: all-mpnet-base-v2
+2025-08-24 13:38:36,842 - INFO - Use pytorch device_name: cpu
+2025-08-24 13:38:36,842 - INFO - Load pretrained SentenceTransformer: all-mpnet-base-v2
+2025-08-24 13:41:06,143 - INFO - Use pytorch device_name: cpu
+2025-08-24 13:41:06,143 - INFO - Load pretrained SentenceTransformer: all-mpnet-base-v2
+2025-08-24 13:43:13,568 - INFO - Use pytorch device_name: cpu
+2025-08-24 13:43:13,568 - INFO - Load pretrained SentenceTransformer: all-mpnet-base-v2
+2025-08-24 14:50:30,781 - INFO - Use pytorch device_name: cpu
+2025-08-24 14:50:30,796 - INFO - Load pretrained SentenceTransformer: all-mpnet-base-v2

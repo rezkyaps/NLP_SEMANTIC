@@ -15,11 +15,48 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
+##############################################
+# PSEUDOCODE FOR AID CLASSIFIER CV SCRIPT
+##############################################
+
+# 1. Load labeled survey text and aid-type keywords from SQL.
+# 2. Initialize a sentence embedding model (e.g., mpnet).
+# 3. Build feature vectors:
+#    - Compute semantic similarity between survey text and each keyword group.
+#    - Weight similarity by scoring metrics (semantic, prompt, final, gate).
+#    - Aggregate + pad features per aid_type.
+# 4. Prepare label matrix for multilabel classification (3 label slots).
+# 5. Oversample rare positive classes to ensure minimum support.
+# 6. Train RandomForest classifiers with class balancing and fixed parameters.
+# 7. For each label:
+#    - Predict probabilities.
+#    - Tune optimal threshold (Youden's J statistic).
+#    - Evaluate ROC, AUC, and store threshold.
+# 8. Apply final model to all data:
+#    - Compute macro F1 and accuracy.
+#    - Log predictions per respondent.
+# 9. Run robustness test via 5-fold CV on oversampled data.
+# 10. (Optional) Save thresholds to SQL for production use.
 
 def log(step):
     print(f"\033[92m[INFO]\033[0m {step}...")
 
 def build_features_and_labels(df_survey, df_kw, model):
+    """
+    Computes similarity-based features between survey responses and aid-type keywords.
+
+    Parameters:
+        df_survey (pd.DataFrame): Survey data containing clean text and labels.
+        df_kw (pd.DataFrame): Keyword table with scores per aid_type.
+        model (SentenceTransformer): SentenceTransformer model for embeddings.
+
+    Returns:
+        X (np.ndarray): Feature matrix (n_samples, n_features).
+        y (np.ndarray): Binary multilabel matrix (n_samples, 3).
+        text_embeddings (np.ndarray): Sentence embeddings of survey responses.
+        df_survey (pd.DataFrame): Original survey DataFrame (used downstream).
+    """
+
     for col in ['semantic_score', 'final_score', 'gate_factor', 'semantic_prompt_score']:
         df_kw[col] = df_kw[col].astype(str).str.replace(',', '.').astype(float)
 
@@ -81,6 +118,20 @@ def compute_weights(y):
     return weights
 
 def guided_oversample(X, y, df_survey=None, min_pos=5):
+    """
+    Oversamples positive samples for each label to ensure minimum support.
+
+    Parameters:
+        X (np.ndarray): Feature matrix.
+        y (np.ndarray): Label matrix.
+        df_survey (pd.DataFrame, optional): Survey data to augment alongside.
+
+    Returns:
+        X_aug (np.ndarray): Augmented feature matrix.
+        y_aug (np.ndarray): Augmented label matrix.
+        df_aug (pd.DataFrame): Augmented survey DataFrame.
+    """
+
     X_aug, y_aug = X.copy(), y.copy()
     df_aug = df_survey.copy() if df_survey is not None else None
     for i in range(y.shape[1]):
@@ -99,6 +150,18 @@ def guided_oversample(X, y, df_survey=None, min_pos=5):
     return X_aug, y_aug, df_aug
 
 def apply_threshold(probas, threshold_map=None, default_threshold=0.5):
+    """
+    Applies thresholding to predicted probabilities to generate binary predictions.
+
+    Parameters:
+        probas (np.ndarray): Probability matrix.
+        threshold_map (dict, optional): Per-label threshold override.
+        default_threshold (float): Default threshold if not specified per label.
+
+    Returns:
+        np.ndarray: Binary prediction matrix.
+    """
+
     preds = np.zeros_like(probas, dtype=int)
     for i in range(probas.shape[1]):
         threshold = threshold_map.get(i, default_threshold) if threshold_map else default_threshold
@@ -106,6 +169,20 @@ def apply_threshold(probas, threshold_map=None, default_threshold=0.5):
     return preds
 
 def find_best_threshold(y_true, y_prob):
+    """
+    Finds the best classification threshold using Youden's J statistic.
+
+    Parameters:
+        y_true (np.ndarray): Ground truth binary labels.
+        y_prob (np.ndarray): Predicted probabilities.
+
+    Returns:
+        best_thresh (float): Optimal threshold.
+        fpr (np.ndarray): False positive rates.
+        tpr (np.ndarray): True positive rates.
+        thresholds (np.ndarray): All candidate thresholds.
+    """
+
     if len(np.unique(y_true)) < 2:
         return 1.0, None, None, None
     fpr, tpr, thresholds = roc_curve(y_true, y_prob)
@@ -114,6 +191,18 @@ def find_best_threshold(y_true, y_prob):
     return best_thresh, fpr, tpr, thresholds
 
 def evaluate_and_log_all(X, y, best_estimators, threshold_map, df_survey, default_threshold=None):
+    """
+    Runs full evaluation and logs performance metrics and per-respondent predictions.
+
+    Parameters:
+        X (np.ndarray): Feature matrix.
+        y (np.ndarray): Ground truth labels.
+        best_estimators (list): List of trained classifiers.
+        threshold_map (dict): Mapping of thresholds per label.
+        df_survey (pd.DataFrame): Survey metadata.
+        default_threshold (float, optional): Default fallback threshold.
+    """
+
     probas = np.column_stack([
         clf.predict_proba(X)[:, 1] if len(clf.classes_) > 1 
         else np.full(X.shape[0], 1.0 if clf.classes_[0] == 1 else 0.0)
@@ -129,6 +218,19 @@ def evaluate_and_log_all(X, y, best_estimators, threshold_map, df_survey, defaul
         log(f"[FULL] Respondent ID: {rid} | Pred: {preds[i].tolist()} | True: {y[i].tolist()}")
 
 def robustness_split_and_evaluate(X_os, y_os, df_survey_os, best_estimators, threshold_map, default_threshold=None, folds=5):
+    """
+    Performs robustness evaluation using K-Fold CV on oversampled dataset.
+
+    Parameters:
+        X_os (np.ndarray): Oversampled feature matrix.
+        y_os (np.ndarray): Oversampled label matrix.
+        df_survey_os (pd.DataFrame): Oversampled survey metadata.
+        best_estimators (list): List of trained classifiers.
+        threshold_map (dict): Threshold per label.
+        default_threshold (float): Default fallback threshold.
+        folds (int): Number of CV folds (default: 5).
+    """
+
     log("\n===== ROBUSTNESS TEST (5-fold split on oversampled data) =====")
     skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=56)
     stratify_label = y_os[:, 2]  # label 03
@@ -162,6 +264,18 @@ def robustness_split_and_evaluate(X_os, y_os, df_survey_os, best_estimators, thr
     log(f"Average Accuracy: {np.mean(acc_list):.4f}")
 
 def crossval_with_fixed_threshold(X, y, df_survey, use_tuned_threshold=True, manual_thresholds=None, folds=5):
+    """
+    Runs training + global threshold tuning + evaluation in one pipeline.
+
+    Parameters:
+        X (np.ndarray): Feature matrix.
+        y (np.ndarray): Label matrix.
+        df_survey (pd.DataFrame): Survey metadata.
+        use_tuned_threshold (bool): Whether to use auto-tuned thresholds.
+        manual_thresholds (dict): Manual threshold fallback per label.
+        folds (int): Number of CV folds for robustness.
+    """
+
     seed = 56
     log(f"\n===== Running CV evaluation using global weights & thresholds (seed={seed}) =====")
 
@@ -202,13 +316,25 @@ def crossval_with_fixed_threshold(X, y, df_survey, use_tuned_threshold=True, man
         if use_tuned_threshold:
             log(f"[GLOBAL] Label {i}: Threshold = {best_thresh:.3f}, AUC = {auc_val:.3f}")
         else:
-            log(f"[GLOBAL] Label {i}: Threshold = {manual_thresholds[i]:.3f} (manual override)")
+            log(f"[GLOBAL] Label {i}: Threshold = {manual_thresholds[i]:.3f} (manual override)") 
         threshold_map[i] = best_thresh
 
     evaluate_and_log_all(X, y, best_estimators, threshold_map if use_tuned_threshold else manual_thresholds, df_survey, default_threshold=0.5)
     robustness_split_and_evaluate(X_os, y_os, df_os, best_estimators, threshold_map if use_tuned_threshold else manual_thresholds, default_threshold=0.5, folds=folds)
 
 def save_threshold_to_db(engine, task_name, label_index, label_name, threshold, weight):
+    """
+    Saves tuned threshold and class weight into SQL table for deployment.
+
+    Parameters:
+        engine (SQLAlchemy engine): Database connection engine.
+        task_name (str): Task identifier.
+        label_index (int): Index of the label.
+        label_name (str): Name of the label.
+        threshold (float): Optimal threshold value.
+        weight (float): Class weight used in training.
+    """
+
     with engine.connect() as conn:
         conn.execute(
             """

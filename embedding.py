@@ -9,6 +9,20 @@ import argparse
 from sqlalchemy import create_engine
 from sqlalchemy.sql import text
 from sentence_transformers import SentenceTransformer
+# ====================================================
+# PSEUDOCODE - EMBEDDING SCRIPT
+# ----------------------------------------------------
+# 1. Load pre-trained local embedding model.
+# 2. Connect to SQL Server using provided connection string.
+# 3. Fetch text data from input table (e.g., 'trainer_profiles_clean').
+# 4. If not overwriting:
+#    - Skip records that already have embeddings.
+# 5. For each new record:
+#    - Compute local embedding using SentenceTransformer.
+#    - Track model used and timestamp.
+# 6. Format and save the embedding vectors as JSON to the output table.
+# 7. Append new rows (if_exists="append") to the destination SQL table.
+# ====================================================
 
 # ========== Logging Setup ==========
 logger = logging.getLogger(__name__)
@@ -36,6 +50,32 @@ def generate_embeddings_with_fallback(
     output_table: str = "trainer_profiles_embedding",
     overwrite_existing: bool = False
 ):
+    """
+    Generate and store text embeddings using a local SentenceTransformer model,
+    with logic to skip already embedded records unless overwrite is enabled.
+
+    Parameters:
+    -----------
+    conn_str : str
+        SQLAlchemy connection string to the SQL Server database.
+
+    input_table : str, default="trainer_profiles_clean"
+        Name of the input SQL table containing text data (must include 'response_id' and 'clean_text').
+
+    output_table : str, default="trainer_profiles_embedding"
+        Name of the destination SQL table to store the embeddings and metadata.
+
+    overwrite_existing : bool, default=False
+        If True, deletes the output table and recomputes embeddings for all rows.
+        If False, only computes embeddings for rows not yet embedded.
+
+    Returns:
+    --------
+    None
+        Embeddings are saved directly to the database.
+        Columns written: response_id, embedding_openai, embedding_local, model_used, created_at.
+    """
+
     engine = create_engine(conn_str)
 
     if overwrite_existing:

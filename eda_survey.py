@@ -5,8 +5,47 @@ import os
 from sqlalchemy import create_engine
 import pyodbc
 
+# =============================================================================
+# Pseudocode: Exploratory Data Analysis (EDA) for Survey Table (t_survey)
+# -----------------------------------------------------------------------------
+# 1. Set and validate output directory for saving plots.
+# 2. Connect to SQL Server and load full survey data from 't_survey' table.
+# 3. Clean column names and split multi-select fields into list (methods_used, aids_used).
+# 4. Convert selected columns to categorical dtype for efficient plotting.
+# 5. Explode list fields to long-form for easier aggregation.
+# 6. Generate and save:
+#    - Bar charts: methods, aids, roles, gender, aid types
+#    - Heatmaps: gender vs method, role vs method
+#    - Grouped and stacked bar charts: methods vs aids/gender/role
+# 7. Final console output confirms EDA completion and output path.
+# =============================================================================
 
 def run_eda_survey_sql(conn_str, output_dir=None):
+    """
+    Executes exploratory data analysis (EDA) on survey data from the 't_survey' SQL table,
+    generates multiple visualizations, and saves them to disk.
+
+    Parameters:
+    ----------
+    conn_str : str
+        SQLAlchemy-compatible connection string to the SQL Server database.
+
+    output_dir : str or None, optional
+        Directory path where the generated plots will be saved.
+        If None, defaults to a folder named 'survey_eda_outputs' in the current directory.
+
+    Returns:
+    -------
+    None
+        The function saves multiple visualizations to the output directory, including:
+            - Bar charts for method and aid proportions
+            - Summary charts for categorical columns (age, gender, role, etc.)
+            - Heatmaps for method usage by gender and role
+            - Grouped and stacked bar charts showing the relationship between aids and methods
+            - Distributions of roles, gender, and aid types
+        No values are returned. Results are saved as `.png` files.
+    """
+
     # Resolve output directory path
     if output_dir is None:
         output_dir = os.path.abspath('survey_eda_outputs')

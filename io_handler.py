@@ -13,8 +13,37 @@ if not logger.handlers:
     formatter = logging.Formatter('[%(asctime)s] %(levelname)s in %(module)s: %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
+##############################################
+# PSEUDOCODE - IO HANDLER (LOAD & SAVE)
+##############################################
+
+# 1. Load parquet file into Pandas DataFrame:
+#     a. Resolve full file path (optionally using base path)
+#     b. Log loading process
+#     c. Return the loaded DataFrame
+
+# 2. Save a DataFrame to SQL Server:
+#     a. Create database engine from connection string
+#     b. Save DataFrame to specified table with chosen mode (replace/append)
+#     c. Log the saving operation
 
 def load_parquet(filename: str, base_path=None) -> pd.DataFrame:
+    """
+    Load a Parquet file into a Pandas DataFrame.
+
+    Parameters
+    ----------
+    filename : str
+        Name of the Parquet file to load.
+    base_path : str, optional
+        Directory where the file is located. If None, uses current file path.
+
+    Returns
+    -------
+    pd.DataFrame
+        Loaded DataFrame.
+    """
+
     """
     Load a Parquet file into a Pandas DataFrame.
 
@@ -39,6 +68,21 @@ def load_parquet(filename: str, base_path=None) -> pd.DataFrame:
     return df
 
 def save_to_sql(df: pd.DataFrame, table_name: str, conn_str: str, mode="replace"):
+    """
+    Save a DataFrame to a SQL Server table.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Data to save.
+    table_name : str
+        Target SQL table name.
+    conn_str : str
+        SQLAlchemy connection string.
+    mode : str
+        'replace' to overwrite, 'append' to add.
+    """
+
     """
     Save a DataFrame to a SQL Server table.
 

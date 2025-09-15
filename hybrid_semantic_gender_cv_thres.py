@@ -19,14 +19,56 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
+##############################################
+# PSEUDOCODE - GENDER CLASSIFIER CV PIPELINE
+##############################################
+
+# 1. Load gender-labeled survey data and keyword list from SQL.
+# 2. Merge label '03_gender' into '02_gender' (binary only).
+# 3. Load SBERT model and encode texts and keywords.
+# 4. Build semantic similarity features:
+#     - cosine similarity with keywords
+#     - weighted by score columns
+#     - padded/truncated for uniformity
+# 5. Generate binary label matrix (2 columns).
+# 6. Oversample minority labels (minimum positive count).
+# 7. Compute balanced class weights for training.
+# 8. Train per-label RandomForest models.
+# 9. Tune threshold per label using ROC curve Youden index.
+# 10. Evaluate full model on training set.
+# 11. Run robustness check with K-Fold CV split.
+# 12. Log F1-score and accuracy at each step.
 
 def log(msg):
     print(f"\033[92m[INFO]\033[0m {msg}")
 
 def compute_auc(fpr, tpr):
+    """
+    Compute AUC (Area Under the Curve) using trapezoidal integration.
+
+    Parameters:
+        fpr (array-like): False Positive Rate values.
+        tpr (array-like): True Positive Rate values.
+
+    Returns:
+        float: AUC value.
+    """
+
     return np.trapz(tpr, fpr)
 
 def apply_threshold(probas, threshold_map=None, default_threshold=0.5):
+    """
+    Apply thresholds to probability matrix to convert to binary predictions.
+
+    Parameters:
+        probas (np.ndarray): Probabilities for each label (n_samples x n_labels).
+        threshold_map (dict or None): Optional per-label threshold values.
+        default_threshold (float): Fallback threshold if map is missing or incomplete.
+
+    Returns:
+        np.ndarray: Binary prediction matrix (same shape as probas).
+    """
+
     preds = np.zeros_like(probas, dtype=int)
     for i in range(probas.shape[1]):
         threshold = threshold_map.get(i, default_threshold) if threshold_map else default_threshold
@@ -34,6 +76,17 @@ def apply_threshold(probas, threshold_map=None, default_threshold=0.5):
     return preds
 
 def find_best_threshold(y_true, y_prob):
+    """
+    Find the best classification threshold using Youden's J statistic.
+
+    Parameters:
+        y_true (np.ndarray): Ground truth binary labels.
+        y_prob (np.ndarray): Predicted probabilities.
+
+    Returns:
+        tuple: (best_threshold, fpr, tpr, thresholds)
+    """
+
     if len(np.unique(y_true)) < 2:
         return 1.0, None, None, None
     fpr, tpr, thresholds = roc_curve(y_true, y_prob)
@@ -42,6 +95,16 @@ def find_best_threshold(y_true, y_prob):
     return best_thresh, fpr, tpr, thresholds
 
 def compute_weights(y):
+    """
+    Compute balanced class weights per label.
+
+    Parameters:
+        y (np.ndarray): Binary label matrix (n_samples x n_labels).
+
+    Returns:
+        list[float]: Weight for class 1 in each label.
+    """
+
     weights = []
     for i in range(y.shape[1]):
         unique_vals = np.unique(y[:, i])
@@ -54,6 +117,19 @@ def compute_weights(y):
     return weights
 
 def guided_oversample(X, y, df_survey=None, min_pos=15):
+    """
+    Oversample minority class per label to ensure minimum number of positives.
+
+    Parameters:
+        X (np.ndarray): Feature matrix.
+        y (np.ndarray): Binary label matrix.
+        df_survey (pd.DataFrame or None): Optional survey metadata.
+        min_pos (int): Minimum number of positive samples per label.
+
+    Returns:
+        tuple: (X_aug, y_aug, df_aug)
+    """
+
     X_aug, y_aug = X.copy(), y.copy()
     df_aug = df_survey.copy() if df_survey is not None else None
     for i in range(y.shape[1]):
@@ -72,6 +148,18 @@ def guided_oversample(X, y, df_survey=None, min_pos=15):
     return X_aug, y_aug, df_aug
 
 def evaluate_and_log_all(X, y, best_estimators, threshold_map, df_survey, default_threshold=None):
+    """
+    Evaluate model on full dataset and log per-respondent predictions.
+
+    Parameters:
+        X (np.ndarray): Feature matrix.
+        y (np.ndarray): Binary label matrix.
+        best_estimators (list): List of trained classifiers.
+        threshold_map (dict): Thresholds for binary conversion.
+        df_survey (pd.DataFrame): Survey data (for respondent IDs).
+        default_threshold (float or None): Fallback threshold.
+    """
+
     probas = np.column_stack([
         clf.predict_proba(X)[:, 1] if len(clf.classes_) > 1 else np.zeros(X.shape[0])
         for clf in best_estimators
@@ -86,6 +174,22 @@ def evaluate_and_log_all(X, y, best_estimators, threshold_map, df_survey, defaul
         log(f"[FULL] Respondent ID: {rid} | Pred: {preds[i].tolist()} | True: {y[i].tolist()}")
 
 def robustness_split_and_evaluate(X_os, y_os, df_survey_os, best_estimators, threshold_map, default_threshold=None, folds=5):
+    """
+    Run Stratified K-Fold CV on oversampled dataset to test model robustness.
+
+    Parameters:
+        X_os (np.ndarray): Oversampled feature matrix.
+        y_os (np.ndarray): Oversampled binary label matrix.
+        df_survey_os (pd.DataFrame): Oversampled metadata.
+        best_estimators (list): Trained classifiers.
+        threshold_map (dict): Thresholds for binary prediction.
+        default_threshold (float): Fallback threshold if none tuned.
+        folds (int): Number of CV folds.
+
+    Returns:
+        None
+    """
+
     log("\n===== ROBUSTNESS TEST (split on oversampled data) =====")
     skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=56)
     stratify_label = y_os[:, 1]  # label 02
@@ -118,6 +222,24 @@ def robustness_split_and_evaluate(X_os, y_os, df_survey_os, best_estimators, thr
     log(f"Average Accuracy: {np.mean(acc_list):.4f}")
 
 def crossval_with_fixed_threshold(X, y, df_survey, use_tuned_threshold=True, folds=5):
+    """
+    Perform training and evaluation pipeline:
+    - Apply oversampling
+    - Train RF classifiers
+    - Tune thresholds (or apply manual)
+    - Evaluate on full data and run robustness check
+
+    Parameters:
+        X (np.ndarray): Feature matrix.
+        y (np.ndarray): Binary label matrix.
+        df_survey (pd.DataFrame): Original data with response IDs.
+        use_tuned_threshold (bool): Whether to use threshold tuning or fixed manual values.
+        folds (int): Number of folds for robustness testing.
+
+    Returns:
+        None
+    """
+
     seed = 56
     log(f"\n===== Running CV evaluation using global weights & thresholds (seed={seed}) =====")
 
@@ -148,6 +270,23 @@ def crossval_with_fixed_threshold(X, y, df_survey, use_tuned_threshold=True, fol
     robustness_split_and_evaluate(X_os, y_os, df_os, best_estimators, threshold_map if use_tuned_threshold else manual_thresholds, default_threshold=0.5, folds=folds)
 
 def build_features_and_labels(df_survey, df_kw, model):
+    """
+    Build semantic similarity features between text and keywords.
+    Merge gender label '03' into '02' as part of preprocessing.
+
+    Parameters:
+        df_survey (pd.DataFrame): Cleaned survey data with gender labels.
+        df_kw (pd.DataFrame): Filtered keywords with semantic scores.
+        model (SentenceTransformer): Loaded SBERT encoder.
+
+    Returns:
+        tuple:
+            - X (np.ndarray): Feature matrix.
+            - y (np.ndarray): Binary label matrix.
+            - text_embeddings (np.ndarray): SBERT text vectors.
+            - df_survey (pd.DataFrame): Updated survey DataFrame.
+    """
+
     for col in ['semantic_score', 'final_score', 'gate_factor', 'semantic_prompt_score']:
         df_kw[col] = df_kw[col].astype(str).str.replace(',', '.').astype(float)
 

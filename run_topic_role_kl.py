@@ -12,7 +12,7 @@ import numpy as np
 import datetime
 from sqlalchemy import create_engine
 from collections import defaultdict
-from scipy.spatial.distance import jensenshannon
+from keyword_scoring import recompute_jsd_and_update  # Reused scoring logic
 
 # ========= Logging =========
 logger = logging.getLogger("role_extractor")
@@ -28,18 +28,16 @@ if not logger.handlers:
     logger.addHandler(fh)
     logger.addHandler(ch)
 
-# ========= Params =========
+# ========= Parameters =========
 CLUSTER_THRESHOLD = 0.6
 KEYBERT_TOPN = 1200
 VECT_MAX_FEATURES = 12000
 FILTER_NUMERIC = True
 
-W_SEM_DOC = 0.30
-W_JSD     = 0.40
-W_PROMPT  = 0.30
 
 def _norm(s: str) -> str:
     return " ".join(s.strip().lower().split())
+
 
 def _ensure_role_table_columns(engine):
     with engine.begin() as cn:
@@ -55,6 +53,8 @@ def _ensure_role_table_columns(engine):
             IF COL_LENGTH('dbo.t_keywords_by_role','score') IS NULL
                 ALTER TABLE dbo.t_keywords_by_role ADD score FLOAT NULL;
         """)
+
+
 def cluster_keywords(keywords, model, threshold=CLUSTER_THRESHOLD):
     if not keywords:
         return []
@@ -77,6 +77,7 @@ def cluster_keywords(keywords, model, threshold=CLUSTER_THRESHOLD):
             best[lab] = cand
     return list(best.values())
 
+
 def build_role_prompts(roles):
     out = {}
     for rc, rn in roles:
@@ -97,20 +98,19 @@ def build_role_prompts(roles):
             out[rc] = f"This webpage reflects the language of role code {rc_str} ({rn or 'unknown role'})."
     return out
 
+
 def run_topic_role(conn_str: str):
     t0 = time.time()
     logger.info("=== ROLE keyword extraction started ===")
     engine = create_engine(conn_str)
 
-    role_table = "m_roles"
-    df_roles = pd.read_sql(f"SELECT role_code, role_name FROM {role_table}", engine)
+    # Read roles and construct prompts
+    df_roles = pd.read_sql("SELECT role_code, role_name FROM m_roles", engine)
     roles = [(str(r.role_code).zfill(2), r.role_name) for _, r in df_roles.iterrows()]
     role_prompts = build_role_prompts(roles)
 
-    # Exclude method/gender keywords
-    df_existing = pd.read_sql("""
-        SELECT keyword FROM t_keywords_by_methods
-    """, engine)
+    # Exclude keywords from method
+    df_existing = pd.read_sql("SELECT keyword FROM t_keywords_by_methods", engine)
     existing_keywords = set(_norm(k) for k in df_existing["keyword"].dropna().tolist())
 
     logger.info("Loading sentence-transformer model…")
@@ -152,10 +152,7 @@ def run_topic_role(conn_str: str):
             stop_words="english",
             top_n=KEYBERT_TOPN
         )
-        best_by_text = {}
-        for k, s in raw_keywords:
-            if k not in best_by_text or s > best_by_text[k]:
-                best_by_text[k] = s
+        best_by_text = {k: max([s for k2, s in raw_keywords if k2 == k]) for k, _ in raw_keywords}
         dedup = [(k, best_by_text[k]) for k in best_by_text]
         clustered = cluster_keywords(dedup, model)
 
@@ -187,42 +184,21 @@ def run_topic_role(conn_str: str):
 
     _ensure_role_table_columns(engine)
 
-    rc_sorted = sorted(filtered_keywords)
-    blobs_lower = {rc: blobs.get(rc, "").lower() for rc in rc_sorted}
-
-    jsd_map = {}
-    for k_norm in kw_best.keys():
-        freq = np.array([blobs_lower[rc].count(k_norm) for rc in rc_sorted], dtype=float)
-        if freq.sum() <= 0:
-            prob = np.full(len(freq), 1.0 / max(1, len(freq)), dtype=float)
-        else:
-            prob = freq / freq.sum()
-        eps = 1e-12
-        prob = np.clip(prob, eps, 1.0); prob = prob / prob.sum()
-        uniform = np.full_like(prob, 1.0 / len(prob))
-        uniform = np.clip(uniform, eps, 1.0); uniform = uniform / uniform.sum()
-        d = jensenshannon(prob, uniform, base=2)
-        jsd01 = float(1.0 - d) if np.isfinite(d) else 0.0
-        jsd_map[k_norm] = jsd01
-
     with engine.begin() as cn:
         cn.exec_driver_sql("DELETE FROM t_keywords_by_role")
         for rc, items in filtered_keywords.items():
             for kw, kb, sd, sp in items:
-                k_norm = _norm(kw)
-                jsd_score = float(jsd_map.get(k_norm, 0.0))
-                def clip01(x):
-                    x = float(x)
-                    if not np.isfinite(x): return 0.0
-                    return float(max(0.0, min(1.0, x)))
-                final_score = float(W_SEM_DOC*clip01(sd) + W_JSD*clip01(jsd_score) + W_PROMPT*clip01(sp))
                 cn.exec_driver_sql("""
                     INSERT INTO t_keywords_by_role
-                    (role_code, keyword, score, semantic_score, semantic_prompt_score, jsd_score, final_score, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (rc, kw, kb, sd, sp, jsd_score, final_score, datetime.datetime.now()))
+                    (role_code, keyword, score, semantic_score, semantic_prompt_score, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (rc, kw, kb, sd, sp, datetime.datetime.now()))
+
+    # --- Call shared scoring ---
+    recompute_jsd_and_update(conn_str, table_name="t_keywords_by_role", code_column="role_code")
 
     logger.info(f"=== ROLE keyword extraction done in {time.time()-t0:.2f}s ===")
+
 
 if __name__ == "__main__":
     conn_str = r"mssql+pyodbc://@localhost\SQLSERV2019/NLP_DOGSTRUST_DEPLOY?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"

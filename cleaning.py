@@ -12,8 +12,38 @@ if not logger.handlers:
     formatter = logging.Formatter('[%(asctime)s] %(levelname)s in %(module)s: %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
+########################################
+# PSEUDOCODE FOR CLEANING MODULE
+########################################
+
+# 1. Set up a logger to track process information or issues.
+# 2. Define a function to load custom spam phrases from a SQL table.
+#    - Connect to database.
+#    - Load 'phrase' column from 'filtered_words' table.
+#    - Return list of non-null phrases.
+#
+# 3. Define a function to clean a text string:
+#    - Remove spam phrases if any provided.
+#    - Remove redacted markers, HTML tags, and content in brackets.
+#    - Remove error messages like 404.
+#    - Remove non-printable characters, symbols, and URLs.
+#    - Remove UK phone numbers and other known spam patterns.
+#    - Normalize: lowercase, remove special characters, collapse whitespace.
+#    - Return cleaned text string.
 
 def load_custom_phrases(conn_str: str, table_name: str = "filtered_words") -> list:
+    """
+    Loads a list of custom phrases (e.g., spam or noise) from a SQL table for filtering.
+
+    Parameters:
+        conn_str (str): SQLAlchemy connection string to the database.
+        table_name (str): Name of the SQL table containing the 'phrase' column (default: 'filtered_words').
+
+    Returns:
+        list: List of strings representing phrases to filter from text.
+              Returns an empty list if loading fails.
+    """
+
     """
     Load spam phrases from SQL table [filtered_words].
     """
@@ -29,6 +59,19 @@ def load_custom_phrases(conn_str: str, table_name: str = "filtered_words") -> li
         return []
 
 def clean_text(text: str, custom_phrases: list = None) -> str:
+    """
+    Cleans a given text string by applying several filters such as:
+    removing spam phrases, redacted content, HTML tags, phone numbers,
+    known spam terms, and normalizing the format.
+
+    Parameters:
+        text (str): Raw input text to be cleaned.
+        custom_phrases (list, optional): List of phrases to remove from the text.
+
+    Returns:
+        str: Cleaned and normalized text string.
+    """
+
     """
     Clean scraped text by removing spam phrases, redacted markers, HTML, and noise.
     """
