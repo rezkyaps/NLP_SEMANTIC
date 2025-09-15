@@ -34,12 +34,58 @@ KEYBERT_TOPN = 1200
 VECT_MAX_FEATURES = 12000
 FILTER_NUMERIC = True
 
+# ====================================================
+# PSEUDOCODE - EXTRACT ROLE-SPECIFIC KEYWORDS
+# ----------------------------------------------------
+# 1. Load role list and build semantic prompts.
+# 2. Load previously extracted keywords (from methods).
+# 3. For each role_code:
+#    a. Pull text blob for all relevant responses.
+#    b. Extract raw keywords using KeyBERT + custom vectorizer.
+#    c. Deduplicate and cluster by semantic similarity.
+#    d. Compute:
+#        - similarity to role-specific text blob (semantic_doc)
+#        - similarity to role-specific prompt (semantic_prompt)
+#        - combined assignment score
+# 4. Assign each keyword to its most relevant role.
+# 5. Insert final keywords into SQL table `t_keywords_by_role`.
+# 6. Ensure table contains required scoring columns.
+# 7. Run shared JSD + final scoring logic (`recompute_jsd_and_update`)
+# ====================================================
 
 def _norm(s: str) -> str:
+    """
+    Normalize input string by:
+        - Lowercasing
+        - Removing extra spaces
+        - Trimming whitespace
+
+    Parameters:
+        s (str): Raw string.
+
+    Returns:
+        str: Cleaned, normalized string.
+    """
+
     return " ".join(s.strip().lower().split())
 
 
 def _ensure_role_table_columns(engine):
+    """
+    Ensures the SQL table `t_keywords_by_role` has necessary float columns:
+        - semantic_score
+        - semantic_prompt_score
+        - jsd_score
+        - final_score
+        - score
+
+    Parameters:
+        engine (sqlalchemy.Engine): Active DB engine.
+
+    Returns:
+        None
+    """
+
     with engine.begin() as cn:
         cn.exec_driver_sql("""
             IF COL_LENGTH('dbo.t_keywords_by_role','semantic_score') IS NULL
@@ -56,6 +102,18 @@ def _ensure_role_table_columns(engine):
 
 
 def cluster_keywords(keywords, model, threshold=CLUSTER_THRESHOLD):
+    """
+    Groups similar keywords via agglomerative clustering based on semantic similarity.
+
+    Parameters:
+        keywords (List[Tuple[str, float]]): (keyword, relevance_score) pairs.
+        model (SentenceTransformer): Sentence embedding model.
+        threshold (float): Similarity threshold for clustering.
+
+    Returns:
+        List[Tuple[str, float]]: One best keyword per cluster based on score.
+    """
+
     if not keywords:
         return []
     texts = [kw for kw, _ in keywords]
@@ -79,6 +137,16 @@ def cluster_keywords(keywords, model, threshold=CLUSTER_THRESHOLD):
 
 
 def build_role_prompts(roles):
+    """
+    Constructs tailored semantic prompts for each role.
+
+    Parameters:
+        roles (List[Tuple[str, str]]): List of (role_code, role_name) tuples.
+
+    Returns:
+        Dict[str, str]: Mapping of role_code to semantic prompt.
+    """
+
     out = {}
     for rc, rn in roles:
         rc_str = str(rc).zfill(2)
@@ -100,6 +168,29 @@ def build_role_prompts(roles):
 
 
 def run_topic_role(conn_str: str):
+    """
+    Runs the full keyword extraction pipeline by role (e.g. trainer, behaviourist).
+
+    Steps:
+        1. Load role metadata and semantic prompts.
+        2. Extract text blobs per role from database.
+        3. Run KeyBERT to extract keywords.
+        4. Filter, deduplicate, and cluster the keywords.
+        5. Compute:
+            - semantic similarity to text blob
+            - similarity to role prompt
+        6. Assign each keyword to its most relevant role.
+        7. Save final results to `t_keywords_by_role`.
+        8. Add missing columns if needed.
+        9. Call shared scoring logic (`recompute_jsd_and_update`).
+
+    Parameters:
+        conn_str (str): SQLAlchemy connection string to the database.
+
+    Returns:
+        None
+    """
+
     t0 = time.time()
     logger.info("=== ROLE keyword extraction started ===")
     engine = create_engine(conn_str)

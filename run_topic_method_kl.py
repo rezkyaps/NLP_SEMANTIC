@@ -19,13 +19,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# --- Method semantic definitions ---
-method_semantic_defs = {
-    "01": "Positive reinforcement: This method introduces pleasant stimuli such as food treats, praise, toys, or playtime immediately after a desired behavior is performed. Its goal is to increase the frequency of that behavior by associating it with a rewarding consequence.",
-    "02": "Negative punishment: This method removes a pleasant stimulus, such as attention, play, or treats, after an undesired behavior occurs. It aims to decrease unwanted behaviors by taking away something the dog values.",
-    "03": "Negative reinforcement: This method removes an unpleasant stimulus, such as leash pressure or a verbal correction, when the dog performs the desired behavior. It increases the likelihood of the behavior being repeated to avoid the aversive condition.",
-    "04": "Positive punishment: This method introduces an unpleasant stimulus, like a leash jerk, noise, or physical correction, after an unwanted behavior. The intent is to reduce that behavior by adding a negative consequence."
-}
+
 
 # --- Tunable parameters ---
 CLUSTER_THRESHOLD = 0.6
@@ -41,14 +35,62 @@ PROMPT_GATE_POW = 2.0
 PROMPT_GATE_MIN = 0.30
 
 
+# ====================================================
+# PSEUDOCODE - RUN KEYWORD PIPELINE
+# ----------------------------------------------------
+# 1. Call keyword extraction function:
+#    - Pull text from DB, extract and cluster keywords,
+#      compute semantic scores, and save to DB.
+# 2. Call JSD scoring function:
+#    - Compute distinctiveness scores (JSD) for each keyword
+#    - Recalculate final score and update DB.
+# ====================================================
+
 def run_topic_method(conn_str: str):
-    """Wrapper to run method keyword extraction and JSD scoring"""
+    """
+    Executes the full keyword extraction and scoring pipeline.
+
+    Steps:
+        1. Extracts and scores keywords using KeyBERT + semantic embeddings.
+        2. Recalculates final keyword scores using JSD and prompt gating.
+        3. Updates results in the 't_keywords_by_methods' SQL table.
+
+    Parameters:
+        conn_str (str): SQLAlchemy connection string to database.
+
+    Returns:
+        None. All results are persisted to the database.
+    """
+
     run_keyword_extraction_with_embeddings(conn_str)
     recompute_jsd_and_update(conn_str)
     
     
-# --- Helpers ---
+# ====================================================
+# PSEUDOCODE - CLUSTER KEYWORDS BY SEMANTICS
+# ----------------------------------------------------
+# 1. Encode keywords into vector embeddings.
+# 2. Compute cosine similarity matrix.
+# 3. Perform agglomerative clustering based on distance.
+# 4. For each cluster, sort by keyword score.
+# 5. Select top-N highest keywords per cluster.
+# 6. Return aggregated list.
+# ====================================================
+
 def cluster_keywords(keywords, model, threshold=CLUSTER_THRESHOLD, topn=TOPN_PER_CLUSTER):
+    """
+    Groups similar keywords using agglomerative clustering on semantic embeddings.
+
+    Parameters:
+        keywords (List[Tuple[str, float]]): List of (keyword, relevance score) pairs.
+        model (SentenceTransformer): Sentence embedding model.
+        threshold (float): Clustering distance threshold (default: CLUSTER_THRESHOLD).
+        topn (int): Max keywords per cluster to return (default: TOPN_PER_CLUSTER).
+
+    Returns:
+        List[Tuple[str, float]]: Filtered list of representative clustered keywords.
+    """
+
     if not keywords:
         return []
     texts = [kw for kw, _ in keywords]
@@ -72,12 +114,52 @@ def cluster_keywords(keywords, model, threshold=CLUSTER_THRESHOLD, topn=TOPN_PER
         clustered_topn.extend(kws_sorted)
     return clustered_topn
 
+# ====================================================
+# PSEUDOCODE - PHRASE TO DOCUMENT SIMILARITY
+# ----------------------------------------------------
+# 1. Encode phrase and full document into embeddings.
+# 2. Compute cosine similarity between both embeddings.
+# 3. Return similarity score.
+# ====================================================
+
 def cosine_similarity_phrase_to_doc(phrase, doc_text, model):
+    """
+    Computes semantic similarity between a phrase and a document.
+
+    Parameters:
+        phrase (str): Keyword or phrase to compare.
+        doc_text (str): Entire document text.
+        model (SentenceTransformer): Embedding model.
+
+    Returns:
+        float: Cosine similarity score.
+    """
+
     doc_emb = model.encode(doc_text, convert_to_tensor=True)
     phrase_emb = model.encode(phrase, convert_to_tensor=True)
     return util.cos_sim(phrase_emb, doc_emb).item()
 
+# ====================================================
+# PSEUDOCODE - PHRASE TO DEFINITION SIMILARITY
+# ----------------------------------------------------
+# 1. Encode keyword and method definition into embeddings.
+# 2. Compute cosine similarity between them.
+# 3. Return similarity score.
+# ====================================================
+
 def get_semantic_relevance(keyword: str, reference_text: str, model) -> float:
+    """
+    Computes the semantic similarity between a keyword and a method definition.
+
+    Parameters:
+        keyword (str): Keyword to evaluate.
+        reference_text (str): Reference definition text.
+        model (SentenceTransformer): Embedding model.
+
+    Returns:
+        float: Similarity score between [0.0, 1.0].
+    """
+
     kw_emb = model.encode(keyword, convert_to_tensor=True)
     ref_emb = model.encode(reference_text, convert_to_tensor=True)
     return util.cos_sim(kw_emb, ref_emb).item()
@@ -158,7 +240,13 @@ def run_keyword_extraction_with_embeddings(conn_str: str):
     cursor.close()
     conn.close()
     print(f" Keyword extraction done in {time.time() - start_time:.2f} seconds.")
-
+# --- Method semantic definitions ---
+method_semantic_defs = {
+    "01": "Positive reinforcement: This method introduces pleasant stimuli such as food treats, praise, toys, or playtime immediately after a desired behavior is performed. Its goal is to increase the frequency of that behavior by associating it with a rewarding consequence.",
+    "02": "Negative punishment: This method removes a pleasant stimulus, such as attention, play, or treats, after an undesired behavior occurs. It aims to decrease unwanted behaviors by taking away something the dog values.",
+    "03": "Negative reinforcement: This method removes an unpleasant stimulus, such as leash pressure or a verbal correction, when the dog performs the desired behavior. It increases the likelihood of the behavior being repeated to avoid the aversive condition.",
+    "04": "Positive punishment: This method introduces an unpleasant stimulus, like a leash jerk, noise, or physical correction, after an unwanted behavior. The intent is to reduce that behavior by adding a negative consequence."
+}
 # --- Recompute JSD + final score ---
 def recompute_jsd_and_update(
     conn_str: str,
@@ -169,6 +257,21 @@ def recompute_jsd_and_update(
     prompt_gate_pow: float = PROMPT_GATE_POW,
     prompt_gate_min: float = PROMPT_GATE_MIN
 ):
+    """
+    Recomputes final keyword scores using Jensen-Shannon divergence (JSD) and prompt relevance.
+
+    Parameters:
+        conn_str (str): SQLAlchemy connection string.
+        w_sem_doc (float): Weight for semantic_doc score.
+        w_jsd (float): Weight for JSD distinctiveness.
+        w_prompt (float): Weight for prompt similarity.
+        prompt_floor (float): Minimum threshold for prompt gating.
+        prompt_gate_pow (float): Power function for gating score.
+        prompt_gate_min (float): Minimum factor when gating is low.
+
+    Returns:
+        None. Updates 't_keywords_by_methods' with final scores.
+    """
     engine = create_engine(conn_str)
     conn = engine.raw_connection()
     cursor = conn.cursor()

@@ -26,6 +26,28 @@ ch = logging.StreamHandler(sys.stdout)
 ch.setFormatter(fmt); ch.setLevel(logging.INFO)
 if not logger.handlers:
     logger.addHandler(fh); logger.addHandler(ch)
+# ====================================================
+# PSEUDOCODE - GENDER-BASED KEYWORD EXTRACTION PIPELINE
+# ----------------------------------------------------
+# 1. Load gender metadata from DB.
+# 2. Fetch all response texts per gender (blob).
+# 3. Generate semantic prompts for each gender.
+# 4. Load sentence-transformer model & KeyBERT.
+# 5. For each gender:
+#    a. Extract keywords from blob using KeyBERT.
+#    b. Cluster keywords by semantic similarity.
+#    c. Filter existing and numeric keywords.
+#    d. Compute:
+#       - similarity to blob (semantic_doc)
+#       - similarity to prompt (semantic_prompt)
+#       - average score (combined_assign)
+# 6. Assign keyword to the best-matching gender.
+# 7. Save final keywords to DB table `t_keywords_by_gender`.
+# 8. Ensure required columns exist in the table.
+# 9. Call `recompute_jsd_and_update()` to calculate:
+#    - JSD distinctiveness
+#    - final gated scores
+# ====================================================
 
 # Parameters
 CLUSTER_THRESHOLD = 0.6
@@ -34,9 +56,30 @@ VECT_MAX_FEATURES = 12000
 FILTER_NUMERIC = True
 
 def _norm(s: str) -> str:
+    """
+    Normalize a string by lowercasing, stripping whitespace, and collapsing spaces.
+
+    Parameters:
+        s (str): Input string.
+
+    Returns:
+        str: Normalized string.
+    """
+
     return " ".join(s.strip().lower().split())
 
 def _ensure_gender_table_columns(engine):
+    """
+    Ensures the target SQL table `t_keywords_by_gender` contains required float columns
+    for semantic scoring and JSD-based analysis.
+
+    Parameters:
+        engine (sqlalchemy.engine.Engine): SQLAlchemy engine connected to target DB.
+
+    Returns:
+        None. Alters table in-place if needed.
+    """
+
     with engine.begin() as cn:
         cn.exec_driver_sql("""
             IF COL_LENGTH('dbo.t_keywords_by_gender','semantic_score') IS NULL
@@ -54,6 +97,18 @@ def _ensure_gender_table_columns(engine):
 
 
 def cluster_keywords(keywords, model, threshold=CLUSTER_THRESHOLD):
+    """
+    Clusters similar keywords based on semantic similarity using embeddings.
+
+    Parameters:
+        keywords (List[Tuple[str, float]]): Keyword and relevance score pairs.
+        model (SentenceTransformer): Embedding model.
+        threshold (float): Clustering distance threshold (default: 0.6).
+
+    Returns:
+        List[Tuple[str, float]]: One top keyword per cluster based on score.
+    """
+
     if not keywords:
         return []
     texts = [kw for kw, _ in keywords]
@@ -76,6 +131,26 @@ def cluster_keywords(keywords, model, threshold=CLUSTER_THRESHOLD):
     return list(best.values())
 
 def run_topic_gender(conn_str: str):
+    """
+    Main pipeline to extract and score gender-specific keywords:
+
+    Steps:
+        1. Loads all cleaned text by gender from database.
+        2. Builds gender-specific semantic prompts.
+        3. Extracts keywords using KeyBERT for each gender blob.
+        4. Filters and clusters keywords.
+        5. Scores them semantically (to blob + prompt).
+        6. Assigns best-matching gender per keyword.
+        7. Saves final keywords to DB.
+        8. Triggers JSD scoring update.
+
+    Parameters:
+        conn_str (str): SQLAlchemy database connection string.
+
+    Returns:
+        None. Writes results to `t_keywords_by_gender` table.
+    """
+
     t0 = time.time()
     logger.info("=== GENDER keyword extraction started ===")
     engine = create_engine(conn_str)
@@ -173,6 +248,16 @@ def run_topic_gender(conn_str: str):
     logger.info(f"=== GENDER keyword extraction done in {time.time()-t0:.2f}s ===")
     
     def build_gender_prompts(genders):
+        """
+    Builds predefined semantic prompts for each gender based on gender_code.
+
+    Parameters:
+        genders (List[Tuple[str, str]]): List of (gender_code, gender_name) tuples.
+
+    Returns:
+        Dict[str, str]: Mapping of gender_code to semantic prompt text.
+    """
+
         out = {}
     for gc, gn in genders:
         gc_str = str(gc).zfill(2)

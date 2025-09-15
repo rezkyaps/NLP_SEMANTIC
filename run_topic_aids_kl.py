@@ -35,10 +35,56 @@ W_JSD = 0.40
 W_PROMPT = 0.30
 FILTER_NUMERIC = True
 
+# ====================================================
+# PSEUDOCODE - EXTRACT AID-SPECIFIC KEYWORDS
+# ----------------------------------------------------
+# 1. Connect to DB and fetch:
+#    - list of aid types + aid codes
+#    - existing keywords (to avoid duplicates)
+#
+# 2. For each aid_type + aid_code:
+#    a. Load cleaned text blob
+#    b. Build task-specific prompt (based on aid_name)
+#    c. Extract keywords with KeyBERT
+#    d. Remove duplicates and cluster semantically
+#    e. For each clustered keyword:
+#       - Compute semantic similarity to blob (sd)
+#       - Compute similarity to prompt (sp)
+#       - Calculate combined score (ca)
+#
+# 3. Assign dominant aid per keyword by highest ca score.
+# 4. Compute Jensen-Shannon Divergence (JSD) for each keyword.
+# 5. Force-include any `aid_name` keyword into final results.
+# 6. Compute final score = weighted sum of sd, sp, jsd.
+# 7. Save all results to SQL table: `t_keywords_by_aid_type`.
+# ====================================================
+
 def _norm(s: str) -> str:
+    """
+    Normalizes a string: lowercased, stripped, and single-spaced.
+
+    Parameters:
+        s (str): Raw input string.
+
+    Returns:
+        str: Cleaned and normalized string.
+    """
+
     return " ".join(s.strip().lower().split())
 
 def cluster_keywords(keywords, model, threshold=CLUSTER_THRESHOLD):
+    """
+    Clusters similar keywords using agglomerative clustering on cosine distances.
+
+    Parameters:
+        keywords (List[Tuple[str, float]]): List of (keyword, score) pairs.
+        model (SentenceTransformer): Embedding model for keyword vectors.
+        threshold (float): Clustering distance threshold (default = 0.6).
+
+    Returns:
+        List[Tuple[str, float]]: Best keyword per cluster based on relevance score.
+    """
+
     if not keywords:
         return []
     texts = [kw for kw, _ in keywords]
@@ -54,6 +100,28 @@ def cluster_keywords(keywords, model, threshold=CLUSTER_THRESHOLD):
     return list(clustered.values())
 
 def run_topic_aids(conn_str: str):
+    """
+    Runs full keyword extraction pipeline for each (aid_type_code, aid_code).
+
+    Steps:
+        - Loads text blobs per aid_code from database.
+        - Builds prompt to guide extraction.
+        - Extracts keywords with KeyBERT + vectorizer.
+        - Removes existing and numeric keywords.
+        - Clusters and computes semantic similarity scores.
+        - Assigns each keyword to the aid it best matches.
+        - Computes JSD across aid_code usage.
+        - Force-includes aid_name if not detected.
+        - Final score = weighted average of semantic_doc, semantic_prompt, JSD.
+        - Saves results to SQL table 't_keywords_by_aid_type'.
+
+    Parameters:
+        conn_str (str): SQLAlchemy connection string to database.
+
+    Returns:
+        None. Writes results to database.
+    """
+
     start = time.time()
     logger.info(" START: Keyword extraction by aid type + code")
 
